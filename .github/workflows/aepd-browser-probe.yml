@@ -1,0 +1,81 @@
+name: AEPD Browser Probe
+
+on:
+  push:
+    branches: [aepd-browser-probe]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Probe AEPD rights-complaint flow
+        run: |
+          cat > probe.js <<'EOF'
+          const { chromium } = require('playwright');
+          (async() => {
+            const browser = await chromium.launch({headless:true});
+            const page = await browser.newPage({ viewport: { width: 1440, height: 1200 } });
+            const url = 'https://sedeaepd.gob.es/sede-electronica-web/vistas/infoSede/tramitesCiudadanoInternet.jsf';
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
+            await page.screenshot({path:'01-start.png', fullPage:true});
+            const body1 = (await page.locator('body').innerText()).replace(/\s+/g,' ').slice(0,12000);
+            console.log('START_TITLE=' + await page.title());
+            console.log('HAS_RIGHTS_TEXT=' + body1.includes('Solicitudes de derechos no atendidas'));
+            console.log('HAS_OTHER_RIGHTS=' + body1.includes('Otros derechos'));
+
+            const links = await page.locator('a').evaluateAll(as => as.map(a => ({text:(a.innerText||'').trim(), href:a.href})).filter(x => /Otros derechos|Acceso|derechos no atendidas/i.test(x.text)));
+            console.log('MATCHING_LINKS=' + JSON.stringify(links));
+
+            let clicked = false;
+            for (const sel of [
+              'text=Otros derechos (Acceso, rectificación, supresión, limitación, portabilidad, oposición, decisiones automatizadas)',
+              'a:has-text("Otros derechos")'
+            ]) {
+              try {
+                const loc = page.locator(sel).first();
+                if (await loc.count()) {
+                  await loc.click({timeout:15000});
+                  clicked = true;
+                  break;
+                }
+              } catch(e) { console.log('CLICK_FAIL=' + e.message); }
+            }
+
+            if (clicked) {
+              await page.waitForLoadState('domcontentloaded', {timeout:45000}).catch(()=>{});
+              await page.waitForTimeout(2500);
+              await page.screenshot({path:'02-after-click.png', fullPage:true});
+              console.log('AFTER_URL=' + page.url());
+              console.log('AFTER_TITLE=' + await page.title());
+              const body2 = (await page.locator('body').innerText()).replace(/\s+/g,' ').slice(0,16000);
+              console.log('AFTER_TEXT=' + body2);
+            } else {
+              console.log('NO_CLICK_TARGET');
+            }
+            await browser.close();
+          })().catch(e => { console.error(e); process.exit(1); });
+          EOF
+          node probe.js
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aepd-probe-screenshots
+          path: |
+            01-start.png
+            02-after-click.png
+          if-no-files-found: ignore
