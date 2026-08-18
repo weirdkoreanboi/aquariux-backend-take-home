@@ -1,8 +1,6 @@
 name: AEPD Browser Probe
 
 on:
-  push:
-    branches: [aepd-browser-probe]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -16,13 +14,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
       - name: Install Playwright
         run: |
           npm init -y >/dev/null 2>&1
           npm install playwright@1.55.0
           npx playwright install --with-deps chromium
-
       - name: Probe AEPD rights-complaint flow
         run: |
           cat > probe.js <<'EOF'
@@ -37,25 +33,15 @@ jobs:
             console.log('START_TITLE=' + await page.title());
             console.log('HAS_RIGHTS_TEXT=' + body1.includes('Solicitudes de derechos no atendidas'));
             console.log('HAS_OTHER_RIGHTS=' + body1.includes('Otros derechos'));
-
             const links = await page.locator('a').evaluateAll(as => as.map(a => ({text:(a.innerText||'').trim(), href:a.href})).filter(x => /Otros derechos|Acceso|derechos no atendidas/i.test(x.text)));
             console.log('MATCHING_LINKS=' + JSON.stringify(links));
-
             let clicked = false;
-            for (const sel of [
-              'text=Otros derechos (Acceso, rectificación, supresión, limitación, portabilidad, oposición, decisiones automatizadas)',
-              'a:has-text("Otros derechos")'
-            ]) {
+            for (const sel of ['a:has-text("Otros derechos")']) {
               try {
                 const loc = page.locator(sel).first();
-                if (await loc.count()) {
-                  await loc.click({timeout:15000});
-                  clicked = true;
-                  break;
-                }
+                if (await loc.count()) { await loc.click({timeout:15000}); clicked = true; break; }
               } catch(e) { console.log('CLICK_FAIL=' + e.message); }
             }
-
             if (clicked) {
               await page.waitForLoadState('domcontentloaded', {timeout:45000}).catch(()=>{});
               await page.waitForTimeout(2500);
@@ -64,14 +50,11 @@ jobs:
               console.log('AFTER_TITLE=' + await page.title());
               const body2 = (await page.locator('body').innerText()).replace(/\s+/g,' ').slice(0,16000);
               console.log('AFTER_TEXT=' + body2);
-            } else {
-              console.log('NO_CLICK_TARGET');
-            }
+            } else { console.log('NO_CLICK_TARGET'); }
             await browser.close();
           })().catch(e => { console.error(e); process.exit(1); });
           EOF
           node probe.js
-
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
